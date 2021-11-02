@@ -1,20 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.6;
+import '@openzeppelin/contracts/security/ReentrancyGuard.sol';
 import './Tokens.sol';
 
-contract OffersListing {
-
-    address public addressTokens;
-    mapping (uint => mapping (uint => Order[])) public orders;
-
-    enum Direction{
-        OFFER,
-        LISTING
-    }
+contract OffersListing is ReentrancyGuard {
 
     struct Order {
-        address payable collector;
+        address nft;
         uint tokenId;
+        address payable collector;
         uint price;
         uint restAmount;
     }
@@ -22,6 +16,7 @@ contract OffersListing {
     event Bid (
         address buyer,
         uint tokenId,
+        address nft,
         uint price,
         uint amount
     );
@@ -29,149 +24,138 @@ contract OffersListing {
     event Sale (
         address seller,
         uint tokenId,
+        address nft,
         uint price,
         uint amount
     );
 
-    constructor (address _addressTokens) {
-        addressTokens = _addressTokens;
-    }
+    Order[] public bids;
+    Order[] public sales;
 
     receive() external payable {}
 
     function Offer(
+        address _nft,
         uint _tokenId,
         uint _amount,
         uint _price
-    ) external payable {
-        require(msg.value >= _amount * _price, 'Not enough ether');
-        Order[] storage sales = orders[_tokenId][1];
-        uint len = sales.length;
+    ) nonReentrant external payable {
+        require(msg.value >= _amount * _price, 'not enough ether');
         uint rest = _amount;
-        while (len > 0 && rest > 0) {
-            if(_price < sales[len-1].price) {
+        for(uint i = 0; i < sales.length; i++) {
+            uint saleAmount;
+            if(sales[i].nft == _nft && sales[i].tokenId == _tokenId && sales[i].price <= _price && sales[i].restAmount > 0) {
+                saleAmount = rest >= sales[i].restAmount ? sales[i].restAmount : rest;
+                sales[i].restAmount =  rest >= sales[i].restAmount ?  0 : sales[i].restAmount - rest;
+                Tokens(sales[i].nft).safeTransferFrom(
+                    sales[i].collector, 
+                    msg.sender, 
+                    sales[i].tokenId, 
+                    saleAmount, 
+                    "");
+                (bool sent, ) = sales[i].collector.call{value: saleAmount * _price}("");
+                require(sent, "Failed to send Ether");
+                rest = rest >= saleAmount ? rest - saleAmount : 0;
+            }
+            if(rest == 0) {
                 break;
             }
-            if( rest >= sales[len-1].restAmount) {
-                sales[len-1].collector.transfer(sales[len-1].restAmount * _price);
-                Tokens(addressTokens).safeTransferFrom(
-                    sales[len-1].collector, 
-                    msg.sender, 
-                    _tokenId, 
-                    sales[len-1].restAmount, 
-                    "");
-                rest -= sales[len-1].restAmount;
-                sales.pop();
-            } else {
-                sales[len-1].collector.transfer(rest * _price);
-                Tokens(addressTokens).safeTransferFrom(
-                    sales[len-1].collector, 
-                    msg.sender, 
-                    _tokenId, 
-                    rest , 
-                    "");
-                sales[len-1].restAmount -= rest;
-                rest = 0;
-            }
-            len--;
         }
-    
-        if ( rest > 0 ) {
-            Order[] storage bids = orders[_tokenId][0];
+        if (rest > 0) {
             bids.push(Order(
-                payable(msg.sender),
+                _nft,
                 _tokenId,
+                payable(msg.sender),
                 _price,
                 rest
             ));
-            len = bids.length;
-            while(len > 1) {
-                if(bids[len-1].price > bids[len-2].price) {
-                    break;
-                }
-                Order memory bid = bids[len-1];
-                bids[len-1] = bids[len-2];
-                bids[len-2] = bid;
-                len--;
-            }
             emit Bid(
-                msg.sender,
-                _tokenId,
-                _price,
-                rest
+                 msg.sender,
+                 _tokenId,
+                 _nft,
+                 _price,
+                 rest
             );
         }       
     }
 
     function Listing(
+        address _nft,
         uint _tokenId,
         uint _amount,
         uint _price
-    ) external {
-        Order[] storage bids = orders[_tokenId][0];
-        uint len = bids.length;
+    ) nonReentrant external {
         uint rest = _amount;
-
-        while (len > 0 && rest > 0) {
-            if(_price > bids[len-1].price) {
+        for(uint i = 0; i < bids.length; i++) {
+            uint bidAmount;
+            if(bids[i].nft == _nft && bids[i].tokenId == _tokenId && bids[i].price >= _price && bids[i].restAmount > 0) {
+                    bidAmount = rest >= bids[i].restAmount ? bids[i].restAmount : rest;
+                    bids[i].restAmount = rest >= bids[i].restAmount ? 0 : bids[i].restAmount - rest; 
+                    Tokens(bids[i].nft).safeTransferFrom(
+                        msg.sender,
+                        bids[i].collector, 
+                        bids[i].tokenId, 
+                        bidAmount, 
+                        "");
+                    (bool sent, ) = payable(msg.sender).call{value: bidAmount * _price}("");
+                    require(sent, "Failed to send Ether");
+                    rest = rest >= bidAmount ? rest - bidAmount : 0;
+            }
+            if(rest == 0) {
                 break;
             }
-            if( rest >= bids[len-1].restAmount) {
-                payable(msg.sender).transfer(bids[len-1].restAmount * bids[len-1].price);
-                Tokens(addressTokens).safeTransferFrom(
-                    msg.sender, 
-                    bids[len-1].collector, 
-                    _tokenId, 
-                    bids[len-1].restAmount, 
-                    "");
-                rest -= bids[len-1].restAmount;
-                bids.pop();
-            } else {
-                payable(msg.sender).transfer(rest * bids[len-1].price);
-                Tokens(addressTokens).safeTransferFrom(
-                    msg.sender, 
-                    bids[len-1].collector, 
-                    _tokenId, 
-                    rest, 
-                    "");
-                bids[len-1].restAmount -= rest;
-                rest = 0;
-            }
-            len--;
         }
-
-        if ( rest > 0 ) {
-            Order[] storage sales = orders[_tokenId][1];
+        if (rest > 0) {
             sales.push(Order(
-                payable(msg.sender),
+                _nft,
                 _tokenId,
+                payable(msg.sender),
                 _price,
                 rest
             ));
-            len = sales.length;
-            while(len > 1) {
-                if(sales[len-1].price < sales[len-2].price) {
-                    break;
-                }
-                Order memory sale = sales[len-1];
-                sales[len-1] = sales[len-2];
-                sales[len-2] = sale;
-                len--;
-            }
-            emit Sale (
-                msg.sender,
-                _tokenId,
-                _price,
-                rest
+            emit Sale(
+                 msg.sender,
+                 _tokenId,
+                 _nft,
+                 _price,
+                 rest
             );
         }
     }
 
-    function getCurrentBids(uint _tokenId) external view returns(Order[] memory) {
-        return orders[_tokenId][0];
+    function getCurrentBids(address _nft) external view returns(Order[] memory) {
+        uint len;
+        for(uint i = 0; i < bids.length; i++) {
+            if(bids[i].nft == _nft) {
+                len++;
+            }
+        }
+        uint j;
+        Order[] memory _bids = new Order[](len);
+        for(uint i = 0; i < bids.length; i++) {
+            if(bids[i].nft == _nft) {
+                _bids[j] = bids[i];
+                j++;
+            }
+        }
+        return _bids;
     }
 
-    function getCurrentSales(uint _tokenId) external view returns(Order[] memory) {
-        return orders[_tokenId][1];
+    function getCurrentSales(address _nft) external view returns(Order[] memory) {
+       uint len;
+        for(uint i = 0; i < sales.length; i++) {
+            if(sales[i].nft == _nft) {
+                len++;
+            }
+        }
+        uint j;
+        Order[] memory _sales = new Order[](len);
+        for(uint i = 0; i < sales.length; i++) {
+            if(sales[i].nft == _nft) {
+                _sales[j] = sales[i];
+                j++;
+            }
+        }
+        return _sales;
     }
 }

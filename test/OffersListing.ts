@@ -10,7 +10,8 @@ const provider = ethers.provider;
 import { OffersListing, Tokens } from '../typechain'
 
 let offersListing: OffersListing
-let tokens: Tokens
+let tokens0: Tokens
+let tokens1: Tokens
 let user0: SignerWithAddress
 let user1: SignerWithAddress
 
@@ -18,30 +19,16 @@ describe('Contract: OffersListing', () => {
 	beforeEach(async () => {
 		[user0, user1] = await ethers.getSigners()
 		let Tokens = await ethers.getContractFactory('Tokens')
-		tokens = await Tokens.deploy() as Tokens
+		tokens0 = await Tokens.deploy() as Tokens
+		tokens1 = await Tokens.deploy() as Tokens
 		let OffersListing = await ethers.getContractFactory('OffersListing')
-		offersListing = await OffersListing.deploy(tokens.address) as OffersListing	
-
-		await tokens.connect(user0).setApprovalForAll(offersListing.address, true);		
-		// await offersListing
-		// 	.connect(user0)
-		// 	.Offer(
-		// 		0,
-		// 		10,
-		// 		11,
-		// 		{ value: ethers.utils.parseEther("0.0005") }
-		// 	)
-		// await offersListing
-		// 	.connect(user0)
-		// 	.Listing(
-		// 		0,
-		// 		10,
-		// 		ethers.utils.parseEther("1")
-		// 	)
+		offersListing = await OffersListing.deploy() as OffersListing	
+		await tokens0.connect(user0).setApprovalForAll(offersListing.address, true);		
 	})
 	describe('Offer', () => {
-		it('should create offer', async () => {
+		it('should create bid', async () => {
 			await expect(offersListing.Offer(
+				tokens0.address,
 				0,
 				10,
 				ethers.utils.parseEther("1"),
@@ -51,73 +38,230 @@ describe('Contract: OffersListing', () => {
 			 		.withArgs(
 						 user0.address,
 						 0,
+						 tokens0.address,
 						 ethers.utils.parseEther("1"),
 						 10
 					);
 		})
 
-		it('should create listing', async () => {
-			await expect(offersListing.Listing(
+		it('should revert if not enouth ether was sent', async() => {
+			await expect(offersListing.Offer(
+				tokens0.address,
 				0,
 				10,
-				ethers.utils.parseEther("1")
+				ethers.utils.parseEther("1"),
+				{ value: ethers.utils.parseEther("9.9") }
+				))
+					.to
+					.be.revertedWith('not enough ether')
+		})
+		it('should return current bids', async () => {
+			await offersListing.Offer(tokens0.address, 0, 10,
+				ethers.utils.parseEther("1"),
+				{ value: ethers.utils.parseEther("10") })
+
+			await offersListing.Offer(tokens1.address, 1, 10,
+				ethers.utils.parseEther("1"),
+				{ value: ethers.utils.parseEther("10") })
+
+			await offersListing.Offer(tokens1.address, 1, 10,
+				ethers.utils.parseEther("1.1"),
+				{ value: ethers.utils.parseEther("11") })
+
+			await offersListing.Offer(tokens0.address, 0, 10,
+				ethers.utils.parseEther("2"),
+				{ value: ethers.utils.parseEther("20") })
+				
+			await offersListing.Offer(tokens0.address, 0, 10,
+				ethers.utils.parseEther("2"),
+				{ value: ethers.utils.parseEther("20") })
+
+			let bids = await offersListing.getCurrentBids(tokens0.address)
+			expect(bids.length).to.equal(3)
+			bids = await offersListing.getCurrentBids(tokens1.address)
+			expect(bids.length).to.equal(2)
+		})
+	})
+
+	describe('Listing', () => {
+		
+		it('should create sale', async () => {
+			await expect(offersListing.Listing(
+				tokens0.address,
+				0,
+				10,
+				ethers.utils.parseEther("1"),
 				))
 					.to.emit(offersListing, 'Sale')
 			 		.withArgs(
 						 user0.address,
 						 0,
+						 tokens0.address,
+						 ethers.utils.parseEther("1"),
+						 10
+					);
+		})
+		it('should return current sales', async () => {
+			await offersListing.Listing(tokens0.address, 0, 10,
+				ethers.utils.parseEther("1"))
+
+			await offersListing.Listing(tokens1.address, 1, 10,
+				ethers.utils.parseEther("1"))
+
+			await offersListing.Listing(tokens1.address, 1, 10,
+				ethers.utils.parseEther("1.1"))
+
+			await offersListing.Listing(tokens0.address, 0, 10,
+				ethers.utils.parseEther("2"))
+				
+			await offersListing.Listing(tokens0.address, 0, 10,
+				ethers.utils.parseEther("2"))
+
+			let sales = await offersListing.getCurrentSales(tokens0.address)
+			expect(sales.length).to.equal(3)
+			sales = await offersListing.getCurrentSales(tokens1.address)
+			expect(sales.length).to.equal(2)
+		})
+	})
+
+	describe('Buy matching', async() => {
+		beforeEach(async () => {
+			//create listing
+			await offersListing.Listing(tokens0.address, 0, 5,
+				ethers.utils.parseEther("1.6"))
+
+			await offersListing.Listing(tokens0.address, 0, 5,
+				ethers.utils.parseEther("1.2"))
+
+			await offersListing.Listing(tokens0.address, 0, 5,
+				ethers.utils.parseEther("1.1"))
+
+			await offersListing.Listing(tokens0.address, 0, 5,
+				ethers.utils.parseEther("1.5"))
+		})
+
+		it('should not buy if there are no matching', async() => {
+			await expect(offersListing.Offer(
+				tokens0.address,
+				0,
+				10,
+				ethers.utils.parseEther("1"),
+				{ value: ethers.utils.parseEther("10") }
+				))
+					.to.emit(offersListing, 'Bid')
+			 		.withArgs(
+						 user0.address,
+						 0,
+						 tokens0.address,
 						 ethers.utils.parseEther("1"),
 						 10
 					);
 		})
 
-		it('should buy if there are appropriate sales', async() => {
-			// let balance0 = await provider.getBalance(user0.address)
-			// let balance1 = await provider.getBalance(user1.address)
-			// console.log(balance0.toString());
-			// console.log(balance1.toString());
-			await offersListing.Listing(0, 6, ethers.utils.parseEther("1.2"))
-			await offersListing.Listing(0, 7, ethers.utils.parseEther("1.5"))
-			await offersListing.Listing(0, 5, ethers.utils.parseEther("1.1"))
-			await offersListing.Listing(0, 7, ethers.utils.parseEther("1.4"))
-
+		it('should not create bid if there are appropriate sales for all tokens', async() => {
 			await offersListing.connect(user1).Offer(
+				tokens0.address,
 				0,
-				15,
+				9,
 				ethers.utils.parseEther("1.3"),
-				{ value: ethers.utils.parseEther("20") })
-			const sales = await offersListing.getCurrentSales(0);
-			console.log(sales[0].restAmount.toString(), sales[0].price.toString());
-			console.log(sales[1].restAmount.toString(), sales[1].price.toString());
-	//		console.log(sales[2].restAmount.toString(), sales[2].price.toString());
-
-			const bids = await offersListing.getCurrentBids(0);			
+				{ value: ethers.utils.parseEther("13") }
+				)
+			const bids = await offersListing.getCurrentBids(tokens0.address)
+			expect(bids.length).to.equal(0)
+			const sales = await offersListing.getCurrentSales(tokens0.address)
+			expect(sales[1].restAmount).to.equal(0)
+			expect(sales[2].restAmount).to.equal(1)
+			expect(await tokens0.balanceOf(user1.address, 0)).to.equal(9);
 		})
 
-		it('should sale if there are appropriate bids', async () => {
-			await offersListing.Offer(0, 6, ethers.utils.parseEther("1.2"),{ value: ethers.utils.parseEther("20") })
-			await offersListing.Offer(0, 7, ethers.utils.parseEther("1.5"),{ value: ethers.utils.parseEther("20") })
-			await offersListing.Offer(0, 5, ethers.utils.parseEther("1.1"),{ value: ethers.utils.parseEther("20") })
-			await offersListing.Offer(0, 7, ethers.utils.parseEther("1.4"),{ value: ethers.utils.parseEther("20") })
-
-			await offersListing.Listing(0, 11, ethers.utils.parseEther("1.2"))
-			const bids = await offersListing.getCurrentBids(0);
-			console.log(bids);	
-			console.log(bids[0].restAmount.toString(), bids[0].price.toString());
-			console.log(bids[1].restAmount.toString(), bids[1].price.toString());
-			console.log(bids[2].restAmount.toString(), bids[2].price.toString());
-		//	console.log(bids[3].restAmount.toString(), bids[3].price.toString());
+		it('should execute order and make a bid for the rest of tokens', async() => {
+			await expect(offersListing.Offer(
+				tokens0.address,
+				0,
+				12,
+				ethers.utils.parseEther("1.3"),
+				{ value: ethers.utils.parseEther("15.6") }
+				))
+					.to.emit(offersListing, 'Bid')
+			 		.withArgs(
+						 user0.address,
+						 0,
+						 tokens0.address,
+						 ethers.utils.parseEther("1.3"),
+						 2
+					);
 		})
-		it('should return current bids', async () => {
-			const bids = await offersListing.getCurrentBids(0);
-		//	console.log(bids);	
-			
-		})
-		it('should return current sales', async () => {
-			const sales = await offersListing.getCurrentSales(0);
-		//	console.log(sales);	
-			
-		})
-		
 	})
+
+	describe('Sale matching', async() => {
+		beforeEach(async () => {
+			await offersListing.connect(user1).Offer(tokens0.address, 0, 10,
+				ethers.utils.parseEther("1"),
+				{ value: ethers.utils.parseEther("10") })
+
+			await offersListing.connect(user1).Offer(tokens0.address, 0, 10,
+				ethers.utils.parseEther("1.3"),
+				{ value: ethers.utils.parseEther("13") })
+
+			await offersListing.connect(user1).Offer(tokens0.address, 0, 10,
+				ethers.utils.parseEther("0.9"),
+				{ value: ethers.utils.parseEther("9") })
+
+			await offersListing.connect(user1).Offer(tokens0.address, 0, 10,
+				ethers.utils.parseEther("0.8"),
+				{ value: ethers.utils.parseEther("8") })
+				
+			await offersListing.connect(user1).Offer(tokens0.address, 0, 10,
+				ethers.utils.parseEther("1.1"),
+				{ value: ethers.utils.parseEther("11") })
+		})
+
+		it('should not sale if there are no matching', async() => {
+			await expect(offersListing.Listing(
+				tokens0.address,
+				0,
+				10,
+				ethers.utils.parseEther("1.4"),
+				))
+					.to.emit(offersListing, 'Sale')
+			 		.withArgs(
+						 user0.address,
+						 0,
+						 tokens0.address,
+						 ethers.utils.parseEther("1.4"),
+						 10
+					);
+		})
+
+		it('should not create sale if there are appropriate bids for all tokens', async() => {
+			await offersListing.Listing(
+				tokens0.address,
+				0,
+				19,
+				ethers.utils.parseEther("1.1"),
+				)
+			const sales = await offersListing.getCurrentSales(tokens0.address)
+			expect(sales.length).to.equal(0)
+			const bids = await offersListing.getCurrentBids(tokens0.address)
+			expect(bids[1].restAmount).to.equal(0)
+			expect(bids[4].restAmount).to.equal(1)
+			expect(await tokens0.balanceOf(user1.address, 0)).to.equal(19);
+		})
+		it('should execute order and make a sale for the rest of tokens', async() => {
+			await expect(offersListing.Listing(
+				tokens0.address,
+				0,
+				25,
+				ethers.utils.parseEther("1.1"),
+				))
+					.to.emit(offersListing, 'Sale')
+			 		.withArgs(
+						 user0.address,
+						 0,
+						 tokens0.address,
+						 ethers.utils.parseEther("1.1"),
+						 5
+				);
+			})
+	})	
 })
